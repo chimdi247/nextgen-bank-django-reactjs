@@ -26,11 +26,19 @@ _logins = _meter.create_counter("bank.logins", description="Login attempts (pass
 _otp = _meter.create_counter("bank.otp.verifications", description="OTP verifications")
 _registrations = _meter.create_counter("bank.registrations", description="Customer registrations")
 _transactions = _meter.create_counter("bank.transactions", description="Transactions by type and status")
-_amount = _meter.create_histogram(
-    "bank.transaction.amount",
-    description="Value of completed transactions",
-    explicit_bucket_boundaries_advisory=[1, 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000],
-)
+_AMOUNT_BUCKETS = [1, 10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000]
+try:
+    _amount = _meter.create_histogram(
+        "bank.transaction.amount",
+        description="Value of completed transactions",
+        explicit_bucket_boundaries_advisory=_AMOUNT_BUCKETS,
+    )
+except TypeError:
+    # older opentelemetry-api: no "advisory" argument, so the SDK's default buckets are used
+    _amount = _meter.create_histogram(
+        "bank.transaction.amount",
+        description="Value of completed transactions",
+    )
 _accounts_opened = _meter.create_counter("bank.accounts.opened", description="Bank accounts opened")
 _kyc = _meter.create_counter("bank.kyc.decisions", description="KYC verification decisions")
 _cards = _meter.create_counter("bank.cards", description="Virtual card events")
