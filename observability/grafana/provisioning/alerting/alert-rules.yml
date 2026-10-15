@@ -1,0 +1,485 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: Resource utilisation
+    folder: NextGen Bank Alerts
+    interval: 30s
+    rules:
+      - uid: nb-container-cpu-gt-40
+        title: Container CPU above 40%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: '100 * sum by (service) (label_replace(rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_service!=""}[2m]), "service", "$$1", "container_label_com_docker_compose_service", "(.+)")) / sum by (service) (label_replace(container_spec_cpu_quota{container_label_com_docker_compose_service!=""} / container_spec_cpu_period{container_label_com_docker_compose_service!=""}, "service", "$$1", "container_label_com_docker_compose_service", "(.+)") > 0)'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [40] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: 'Container {{ $$labels.service }} is using {{ printf "%.0f" $$values.B.Value }}% of its CPU limit'
+          description: 'CPU usage relative to the container CPU limit has been above 40% for 2 minutes.'
+          dashboard_uid: nb-overview
+        labels:
+          severity: warning
+          scope: container
+        isPaused: false
+      - uid: nb-container-memory-gt-40
+        title: Container memory above 40%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: '100 * sum by (service) (label_replace(container_memory_working_set_bytes{container_label_com_docker_compose_service!=""}, "service", "$$1", "container_label_com_docker_compose_service", "(.+)")) / sum by (service) (label_replace(container_spec_memory_limit_bytes{container_label_com_docker_compose_service!=""}, "service", "$$1", "container_label_com_docker_compose_service", "(.+)") > 0)'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [40] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: 'Container {{ $$labels.service }} is using {{ printf "%.0f" $$values.B.Value }}% of its memory limit'
+          description: 'Working-set memory relative to the container memory limit has been above 40% for 2 minutes.'
+          dashboard_uid: nb-overview
+        labels:
+          severity: warning
+          scope: container
+        isPaused: false
+      - uid: nb-node-cpu-gt-40
+        title: Node CPU above 40%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: '100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100)'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [40] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: 'Node {{ $$labels.instance }} CPU is at {{ printf "%.0f" $$values.B.Value }}%'
+          description: 'Host (docker node) CPU utilisation has been above 40% for 2 minutes.'
+          dashboard_uid: nb-overview
+        labels:
+          severity: warning
+          scope: node
+        isPaused: false
+      - uid: nb-node-memory-gt-40
+        title: Node memory above 40%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: '100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [40] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: 'Node {{ $$labels.instance }} memory is at {{ printf "%.0f" $$values.B.Value }}%'
+          description: 'Host (docker node) memory utilisation has been above 40% for 2 minutes.'
+          dashboard_uid: nb-overview
+        labels:
+          severity: warning
+          scope: node
+        isPaused: false
+  - orgId: 1
+    name: Data platform
+    folder: NextGen Bank Alerts
+    interval: 30s
+    rules:
+      - uid: nb-postgres-down
+        title: PostgreSQL is down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: 'pg_up{job="postgres"}'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        noDataState: Alerting
+        execErrState: Error
+        for: 1m
+        annotations:
+          summary: 'PostgreSQL is not reachable by postgres-exporter'
+          description: 'pg_up has been 0 (or missing) for 1 minute. The API cannot serve requests.'
+          dashboard_uid: nb-postgres
+        labels:
+          severity: critical
+          scope: postgres
+        isPaused: false
+      - uid: nb-postgres-connections-gt-80
+        title: PostgreSQL connections above 80%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: '100 * sum(pg_stat_database_numbackends{job="postgres"}) / 100'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [80] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: 'PostgreSQL is using {{ printf "%.0f" $$values.B.Value }}% of max_connections'
+          description: 'Open backends / max_connections (100) above 80% for 2 minutes.'
+          dashboard_uid: nb-postgres
+        labels:
+          severity: warning
+          scope: postgres
+        isPaused: false
+      - uid: nb-postgres-replication-lag-gt-30
+        title: PostgreSQL replication lag above 30s
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: 'max(pg_replication_lag_seconds{job="postgres-replica"})'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [30] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: 'The replica is {{ printf "%.0f" $$values.B.Value }} s behind the primary'
+          description: 'Streaming replication lag has been above 30 seconds for 2 minutes.'
+          dashboard_uid: nb-postgres
+        labels:
+          severity: warning
+          scope: postgres
+        isPaused: false
+      - uid: nb-pgbouncer-clients-waiting
+        title: PgBouncer clients waiting for a connection
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: 'sum(pgbouncer_pools_client_waiting_connections)'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: '{{ printf "%.0f" $$values.B.Value }} client(s) are queueing for a server connection'
+          description: 'The PgBouncer pool is exhausted: clients have been waiting for 2 minutes.'
+          dashboard_uid: nb-pgbouncer
+        labels:
+          severity: warning
+          scope: pgbouncer
+        isPaused: false
+      - uid: nb-redis-memory-gt-80
+        title: Redis memory above 80%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: '100 * redis_memory_used_bytes / redis_memory_max_bytes'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [80] }
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: 'Redis is using {{ printf "%.0f" $$values.B.Value }}% of maxmemory'
+          description: 'Redis memory above 80% of maxmemory: keys will start to be evicted.'
+          dashboard_uid: nb-redis
+        labels:
+          severity: warning
+          scope: redis
+        isPaused: false
+      - uid: nb-rabbitmq-backlog-gt-100
+        title: RabbitMQ backlog above 100 messages
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: 'sum(rabbitmq_queue_messages_ready)'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [100] }
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: '{{ printf "%.0f" $$values.B.Value }} messages are waiting in RabbitMQ queues'
+          description: 'Ready messages above 100 for 5 minutes: Celery workers are not keeping up (e-mails and tasks are delayed).'
+          dashboard_uid: nb-rabbitmq
+        labels:
+          severity: warning
+          scope: rabbitmq
+        isPaused: false
+      - uid: nb-rabbitmq-no-consumers
+        title: RabbitMQ has no consumers
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: 'sum(rabbitmq_consumers)'
+              instant: true
+              range: false
+              intervalMs: 15000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+              settings: { mode: dropNN }
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              refId: C
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+        noDataState: Alerting
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: 'No Celery worker is consuming from RabbitMQ'
+          description: 'Consumers = 0 for 2 minutes: no OTP / activation e-mail will be sent.'
+          dashboard_uid: nb-rabbitmq
+        labels:
+          severity: critical
+          scope: rabbitmq
+        isPaused: false

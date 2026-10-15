@@ -1,0 +1,12 @@
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: NextGen Bank Ops (email)
+    receivers:
+      - uid: nb-email
+        type: email
+        settings:
+          # comma / semicolon separated; from ALERT_EMAIL_TO in .envs/.env.local (SMTP itself is configured in grafana.ini)
+          addresses: $ALERT_EMAIL_TO
+          singleEmail: false
+        disableResolveMessage: false

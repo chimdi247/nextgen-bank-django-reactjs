@@ -1,0 +1,63 @@
+# OpenTelemetry Collector
+#   Java services (OTel agent) --OTLP--> collector --> traces  -> Tempo (OTLP/gRPC)
+#                                                  --> logs    -> Loki  (native OTLP endpoint)
+#                                                  --> metrics -> :8889 (scraped by Prometheus)
+# Logs keep trace_id / span_id of the active span => log line -> trace (Loki derived field) and span -> logs (Tempo).
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+  # every datapoint gets plain `service_name` / `service_instance_id` labels: several gunicorn workers and celery
+  # processes export the same metric names, and without the instance label they would overwrite each other
+  transform/service_label:
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(attributes["service_name"], resource.attributes["service.name"])
+          - set(attributes["service_instance_id"], resource.attributes["service.instance.id"])
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    enable_open_metrics: true          # exemplars (metric -> trace)
+    metric_expiration: 5m
+    resource_to_telemetry_conversion:
+      enabled: false
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/service_label, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]

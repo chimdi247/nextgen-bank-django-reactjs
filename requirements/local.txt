@@ -1,0 +1,6 @@
+-r base.txt
+-r otel.txt
+
+watchfiles==0.22.0
+black==24.8.0
+gunicorn==22.0.0

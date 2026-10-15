@@ -1,0 +1,7 @@
+# Unit + integration tests (tests/unit, tests/integration) run on SQLite with in-memory cache / mail
+-r base.txt
+-r otel.txt
+pytest==8.3.3
+pytest-django==4.9.0
+pytest-cov==5.0.0
+freezegun==1.5.1

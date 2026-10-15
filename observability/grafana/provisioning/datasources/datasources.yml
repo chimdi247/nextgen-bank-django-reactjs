@@ -1,0 +1,84 @@
+apiVersion: 1
+
+deleteDatasources:
+  - { name: Prometheus, orgId: 1 }
+  - { name: Loki, orgId: 1 }
+  - { name: Tempo, orgId: 1 }
+
+datasources:
+  # ------------------------------------------------------------------ metrics
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s
+      # metric exemplars -> trace in Tempo
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+        - name: traceID
+          datasourceUid: tempo
+
+  # ------------------------------------------------------------------ logs
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 1000
+      # Clicking a log line shows a "Tempo" button next to trace_id that opens the full trace + spans.
+      # With Loki's OTLP ingestion trace_id is *structured metadata*, hence matcherType: label.
+      derivedFields:
+        - name: trace_id
+          label: Trace
+          matcherType: label
+          matcherRegex: trace_id
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+          urlDisplayLabel: "Open trace in Tempo"
+
+  # ------------------------------------------------------------------ traces
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      httpMethod: GET
+      # span -> related logs (Loki), filtered by trace id (and narrowed to the span's service)
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: "-2m"
+        spanEndTimeShift: "2m"
+        filterByTraceID: false
+        filterBySpanID: false
+        customQuery: true
+        query: '{service_name="$${__span.tags["service.name"]}"} | trace_id="$${__span.traceId}"'
+      # span -> RED metrics
+      tracesToMetrics:
+        datasourceUid: prometheus
+        spanStartTimeShift: "-2m"
+        spanEndTimeShift: "2m"
+        tags:
+          - { key: service.name, value: service_name }
+        queries:
+          - name: Request rate
+            query: 'sum(rate(http_server_request_duration_seconds_count{$$__tags}[1m]))'
+          - name: p95 latency
+            query: 'histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{$$__tags}[1m])))'
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      lokiSearch:
+        datasourceUid: loki

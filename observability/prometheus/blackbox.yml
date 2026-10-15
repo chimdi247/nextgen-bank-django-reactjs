@@ -1,0 +1,16 @@
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+  http_2xx_rabbitmq:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      basic_auth:            # RABBITMQ_DEFAULT_USER / RABBITMQ_DEFAULT_PASS of .envs/.env.local
+        username: rabbit
+        password: rabbit_local_password

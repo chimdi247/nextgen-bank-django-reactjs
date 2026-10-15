@@ -1,0 +1,19 @@
+.git/
+*.pyc
+*.pyo
+__pycache__/
+.vscode
+.idea
+venv/
+.venv/
+*.log
+staticfiles/
+media/
+.envs/*
+!.envs/.env.example
+# not needed inside the Django image
+frontend/
+tests/
+observability/
+backups/
+node_modules/

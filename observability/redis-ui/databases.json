@@ -1,0 +1,9 @@
+[
+  {
+    "name": "NextGen Redis (cache / throttling / celery results)",
+    "host": "redis",
+    "port": 6379,
+    "db": 1,
+    "tls": false
+  }
+]

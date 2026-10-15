@@ -1,0 +1,562 @@
+# =============================================================================
+# NextGen Bank - the whole platform with one command:
+#
+#     docker compose -f local.yml up --build -d          (or: make build)
+#
+#   App (React UI + API)   http://localhost:8080          login: admin@example.com / password123
+#   Mailpit (OTP e-mails)  http://localhost:8025          <- the login OTP arrives here
+#   Grafana                http://localhost:3001          dashboards, logs <-> traces, alerts (admin / admin)
+#   RabbitMQ  :15672   Flower :5555   RedisInsight :5540   Prometheus :9090   Loki :3100   Tempo :3200
+#   Tests (opt-in)         make test-unit | test-integration | test-selenium | test-smoke | test-load ...
+#
+# Request path:  browser -> nginx -> gunicorn (api) -> PgBouncer -> PostgreSQL (+ streaming replica)
+#                                               |-> Redis (cache / throttling / Celery results)
+#                                               '-> RabbitMQ -> Celery worker -> SMTP (Mailpit)
+# =============================================================================
+
+x-otel-env: &otel-env
+  # OTLP over HTTP to the collector; the SDK is initialised in config/telemetry.py (traces + metrics + logs)
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_METRIC_EXPORT_INTERVAL: "15000"
+  OTEL_PROPAGATORS: tracecontext,baggage            # W3C context: HTTP, Celery task headers
+  OTEL_SEMCONV_STABILITY_OPT_IN: http/dup           # emit the stable AND the legacy HTTP metric names
+  OTEL_PYTHON_DJANGO_EXCLUDED_URLS: "api/v1/health/,nginx-health"
+  DEPLOYMENT_ENVIRONMENT: local
+
+x-django: &django
+  build:
+    context: .
+    dockerfile: ./docker/local/django/Dockerfile
+  image: nextgen-bank-django:local
+  env_file:
+    - ./.envs/.env.local
+  environment:
+    <<: *otel-env
+  volumes:
+    - .:/app:z                       # live code (gunicorn: GUNICORN_RELOAD=true to auto-reload)
+    - static_data:/app/staticfiles   # shared with nginx
+    - media_data:/app/media          # uploaded profile photos, shared with nginx + celery
+  networks:
+    - banker_local_nw
+
+services:
+  # ===========================================================================
+  # APPLICATION
+  # ===========================================================================
+  api:
+    <<: *django
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: nextgen-api
+    command: /start.sh
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:8000/api/v1/health/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    mem_limit: 1536m
+    cpus: 1.5
+
+  celeryworker:
+    <<: *django
+    command: /start-celeryworker.sh
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 1g
+    cpus: 1.0
+
+  celerybeat:
+    <<: *django
+    command: /start-celerybeat.sh
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: 0.5
+
+  flower:
+    <<: *django
+    command: /start-flower.sh
+    ports:
+      - "5555:5555"
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: 0.5
+
+  nginx:
+    build:
+      context: .
+      dockerfile: ./docker/local/nginx/Dockerfile
+    restart: always
+    ports:
+      - "8080:80"
+    volumes:
+      - static_data:/app/staticfiles:ro
+      - media_data:/app/media:ro
+      - logs_store:/var/log/nginx
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/nginx-health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.5
+    networks:
+      - banker_local_nw
+
+  # ===========================================================================
+  # DATA & MESSAGING
+  # ===========================================================================
+  postgres:
+    build:
+      context: .
+      dockerfile: ./docker/local/postgres/Dockerfile
+    # wal_level / senders / slots: streaming replication to postgres-replica
+    command: >
+      postgres -c max_connections=100 -c wal_level=replica -c max_wal_senders=10
+      -c max_replication_slots=5 -c shared_buffers=256MB -c track_io_timing=on
+    env_file:
+      - ./.envs/.env.local
+    ports:
+      - "5432:5432"
+    volumes:
+      - banker_local_db:/var/lib/postgresql/data
+      - ./backups:/backups
+      # 00-replication.sh, 01-schema.sql, 02-seed-admin.sql, 03-demo-data.sql: run once, on an empty volume
+      - ./docker/local/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1 = TCP: only succeeds once the init scripts are done and the real server is up
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    mem_limit: 1g
+    cpus: 1.5
+    networks:
+      - banker_local_nw
+
+  postgres-replica:
+    build:
+      context: .
+      dockerfile: ./docker/local/postgres/Dockerfile
+    entrypoint: ["/bin/bash", "/replica-entrypoint.sh"]
+    env_file:
+      - ./.envs/.env.local
+    volumes:
+      - banker_local_db_replica:/var/lib/postgresql/data
+      - ./docker/local/postgres/replica/entrypoint.sh:/replica-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    networks:
+      - banker_local_nw
+
+  pgbouncer:
+    build:
+      context: .
+      dockerfile: ./docker/local/pgbouncer/Dockerfile
+    env_file:
+      - ./.envs/.env.local
+    ports:
+      - "6432:6432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.5
+    networks:
+      - banker_local_nw
+
+  redis:
+    image: docker.io/redis:7.2-alpine
+    # bounded memory (so "memory used %" is meaningful) + LRU eviction; it is a cache, not a datastore
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 384m
+    cpus: 0.5
+    networks:
+      - banker_local_nw
+
+  rabbitmq:
+    image: docker.io/rabbitmq:3.13-management-alpine
+    env_file:
+      - ./.envs/.env.local           # RABBITMQ_DEFAULT_USER / RABBITMQ_DEFAULT_PASS
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./observability/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+      - ./observability/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/90-nextgen.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    mem_limit: 1g
+    cpus: 1.0
+    networks:
+      - banker_local_nw
+
+  mailpit:
+    image: docker.io/axllent/mailpit:v1.20.3
+    ports:
+      - "8025:8025"        # web UI: every e-mail (login OTP, activation links, Grafana alerts)
+      - "1025:1025"
+    volumes:
+      - banker_mailpit_db:/data
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_DATA_FILE: /data/mailpit.db
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    mem_limit: 256m
+    networks:
+      - banker_local_nw
+
+  redisinsight:
+    image: docker.io/redis/redisinsight:2.60
+    ports:
+      - "5540:5540"
+    environment:
+      RI_APP_PORT: "5540"
+      RI_PRE_SETUP_DATABASES_PATH: /config/databases.json   # the NextGen Redis is registered automatically
+    volumes:
+      - ./observability/redis-ui/databases.json:/config/databases.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    mem_limit: 512m
+    networks:
+      - banker_local_nw
+
+  # ===========================================================================
+  # OBSERVABILITY   (all configuration lives in ./observability and is mounted read-only)
+  # ===========================================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.130.0
+    container_name: otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    ports:
+      - "4317:4317"                            # OTLP gRPC
+      - "4318:4318"                            # OTLP HTTP
+    volumes:
+      - ./observability/otel-collector/otel-collector-config.yml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - tempo
+      - loki
+    mem_limit: 512m
+    networks: [banker_local_nw]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver     # Tempo metrics-generator (span metrics / service graph)
+      - --web.enable-lifecycle
+      - --enable-feature=exemplar-storage      # metric -> trace links
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    mem_limit: 1536m
+    networks: [banker_local_nw]
+
+  loki:
+    image: grafana/loki:3.5.0
+    container_name: loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    mem_limit: 768m
+    networks: [banker_local_nw]
+
+  tempo-init:
+    # Tempo runs as uid 10001 and needs a writable data directory
+    image: busybox:1.36
+    container_name: tempo-init
+    user: root
+    command: ["chown", "-R", "10001:10001", "/var/tempo"]
+    volumes:
+      - tempo-data:/var/tempo
+    restart: "no"
+    networks: [banker_local_nw]
+
+  tempo:
+    image: grafana/tempo:2.8.2
+    container_name: tempo
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      - "3200:3200"
+    volumes:
+      - ./observability/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    depends_on:
+      tempo-init:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_started
+    mem_limit: 768m
+    networks: [banker_local_nw]
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    env_file:
+      - ./.envs/.env.local            # GF_SECURITY_ADMIN_*, SMTP_*, ALERT_EMAIL_TO ($__env{...} in grafana.ini / alert provisioning)
+    volumes:
+      - ./observability/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    mem_limit: 768m
+    networks:
+      - banker_local_nw
+
+  cadvisor:
+    # per-container CPU / memory / network metrics
+    image: gcr.io/cadvisor/cadvisor:v0.52.1
+    container_name: cadvisor
+    restart: unless-stopped
+    privileged: true
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.service
+    ports:
+      - "8085:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    mem_limit: 512m
+    networks: [banker_local_nw]
+
+  node-exporter:
+    # node (host / docker VM) CPU, memory, disk, network metrics
+    image: prom/node-exporter:v1.9.1
+    container_name: node-exporter
+    restart: unless-stopped
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /:/host:ro
+    mem_limit: 128m
+    networks: [banker_local_nw]
+
+  blackbox-exporter:
+    # probes /actuator/health of every service -> uptime / availability SLI
+    image: prom/blackbox-exporter:v0.27.0
+    container_name: blackbox-exporter
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./observability/prometheus/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    mem_limit: 128m
+    networks: [banker_local_nw]
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    env_file:
+      - ./.envs/.env.local            # DATA_SOURCE_NAME -> postgres (direct, not through PgBouncer)
+    command:
+      - --auto-discover-databases
+      - --exclude-databases=template0,template1
+      - --collector.postmaster
+      - --collector.long_running_transactions
+      - --collector.stat_activity_autovacuum
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 128m
+    networks:
+      - banker_local_nw
+
+  postgres-replica-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    environment:
+      # keep in sync with POSTGRES_* in .envs/.env.local
+      DATA_SOURCE_NAME: postgresql://banker:banker_local_password@postgres-replica:5432/banker?sslmode=disable
+    command:
+      - --collector.postmaster
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
+    mem_limit: 128m
+    networks:
+      - banker_local_nw
+
+  pgbouncer-exporter:
+    image: quay.io/prometheuscommunity/pgbouncer-exporter:v0.10.2
+    env_file:
+      - ./.envs/.env.local            # PGBOUNCER_EXPORTER_CONNECTION_STRING -> the virtual "pgbouncer" admin database
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+    mem_limit: 64m
+    networks:
+      - banker_local_nw
+
+  redis-exporter:
+    image: docker.io/oliver006/redis_exporter:v1.62.0
+    env_file:
+      - ./.envs/.env.local            # REDIS_ADDR
+    depends_on:
+      redis:
+        condition: service_healthy
+    mem_limit: 64m
+    networks:
+      - banker_local_nw
+
+  # ===========================================================================
+  # TESTS  (opt-in, profile "tests"; see tests/README.md and the Makefile targets test-*)
+  # ===========================================================================
+  test-runner:
+    # unit + integration tests: same code as the api, test dependencies, SQLite + in-memory cache / mail
+    profiles: ["tests"]
+    build:
+      context: .
+      dockerfile: ./docker/local/django/Dockerfile
+      args:
+        BUILD_ENVIRONMENT: test
+    image: nextgen-bank-django-test:local
+    entrypoint: []
+    working_dir: /app
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      OTEL_SDK_DISABLED: "true"
+    volumes:
+      - .:/app:z
+    networks:
+      - banker_local_nw
+
+  selenium:
+    profiles: ["tests"]
+    image: docker.io/selenium/standalone-chrome:4.23.0
+    shm_size: 2g
+    ports:
+      - "4444:4444"
+      - "7900:7900"        # noVNC: watch the browser at http://localhost:7900 (password: secret)
+    environment:
+      SE_NODE_MAX_SESSIONS: "2"
+    networks:
+      - banker_local_nw
+
+  e2e-runner:
+    # Selenium browser tests + live-API checks
+    profiles: ["tests"]
+    build:
+      context: ./tests/e2e
+    working_dir: /tests
+    environment:
+      BASE_URL: http://nginx
+      SELENIUM_URL: http://selenium:4444/wd/hub
+      MAILPIT_URL: http://mailpit:8025
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: password123
+    volumes:
+      - ./tests/e2e:/tests
+      - ./tests/results:/results
+    depends_on:
+      - selenium
+    networks:
+      - banker_local_nw
+
+  k6:
+    profiles: ["tests"]
+    image: grafana/k6:1.1.0
+    user: root
+    entrypoint: ["k6"]
+    environment:
+      BASE_URL: http://nginx
+      MAILPIT_URL: http://mailpit:8025
+      PROM_URL: http://prometheus:9090
+      K6_OUT: experimental-prometheus-rw
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: 5s
+      K6_PROMETHEUS_RW_TREND_STATS: avg,min,max,p(90),p(95),p(99)
+      K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM: "false"
+      K6_PROMETHEUS_RW_STALE_MARKERS: "true"
+    volumes:
+      - ./tests/performance/k6:/scripts:ro
+      - ./tests/results:/results
+    working_dir: /scripts
+    networks:
+      - banker_local_nw
+
+networks:
+  banker_local_nw:
+    driver: bridge          # created automatically (it was `external: true`, so compose failed unless you created it first)
+
+volumes:
+  banker_local_db:
+  banker_local_db_replica:
+  banker_mailpit_db:
+  logs_store:
+  rabbitmq_data:
+  static_data:
+  media_data:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:

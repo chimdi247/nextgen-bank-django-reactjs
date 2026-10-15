@@ -1,0 +1,5 @@
+-r base.txt
+-r otel.txt
+
+gunicorn==22.0.0
+psycopg2-binary==2.9.9

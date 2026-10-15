@@ -1,0 +1,87 @@
+# Prometheus
+#  * application metrics (Django / Celery auto-instrumentation + bank_* business metrics) arrive via the OTel Collector (:8889)
+#  * containers -> cAdvisor, node -> node-exporter
+#  * PostgreSQL (primary + replica), PgBouncer, Redis -> dedicated exporters; RabbitMQ and Flower expose metrics natively
+#  * uptime -> blackbox probes
+#  * Tempo remote-writes span-metrics + service-graph metrics
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: nextgen-bank
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [{ targets: ["localhost:9090"] }]
+
+  - job_name: otel-collector
+    honor_labels: true
+    static_configs: [{ targets: ["otel-collector:8889"] }]
+
+  - job_name: cadvisor
+    static_configs: [{ targets: ["cadvisor:8080"] }]
+
+  - job_name: node-exporter
+    static_configs: [{ targets: ["node-exporter:9100"] }]
+
+  - job_name: tempo
+    static_configs: [{ targets: ["tempo:3200"] }]
+
+  - job_name: loki
+    static_configs: [{ targets: ["loki:3100"] }]
+
+  - job_name: grafana
+    static_configs: [{ targets: ["grafana:3000"] }]
+
+  # ---- data tier
+  - job_name: postgres
+    static_configs: [{ targets: ["postgres-exporter:9187"] }]
+
+  - job_name: postgres-replica
+    static_configs: [{ targets: ["postgres-replica-exporter:9187"] }]
+
+  - job_name: pgbouncer
+    static_configs: [{ targets: ["pgbouncer-exporter:9127"] }]
+
+  - job_name: redis
+    static_configs: [{ targets: ["redis-exporter:9121"] }]
+
+  # rabbitmq_prometheus plugin (observability/rabbitmq/enabled_plugins); per-queue series are enabled in rabbitmq.conf
+  - job_name: rabbitmq
+    static_configs: [{ targets: ["rabbitmq:15692"] }]
+
+  # Celery task / worker metrics (credentials = CELERY_FLOWER_USER / CELERY_FLOWER_PASSWORD of .envs/.env.local)
+  - job_name: flower
+    basic_auth: { username: flower, password: flower }
+    static_configs: [{ targets: ["flower:5555"] }]
+
+  # ---- uptime / availability SLI: probe_success{service_name="..."}
+  - job_name: blackbox-health
+    metrics_path: /probe
+    params: { module: [http_2xx] }
+    static_configs:
+      - targets: ["http://nginx/nginx-health"]
+        labels: { service_name: nginx }
+      - targets: ["http://nginx/"]
+        labels: { service_name: frontend }
+      - targets: ["http://api:8000/api/v1/health/"]
+        labels: { service_name: api }
+      - targets: ["http://mailpit:8025/livez"]
+        labels: { service_name: mailpit }
+      - targets: ["http://grafana:3000/api/health"]
+        labels: { service_name: grafana }
+    relabel_configs: &probe_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: blackbox-rabbitmq
+    metrics_path: /probe
+    params: { module: [http_2xx_rabbitmq] }
+    static_configs:
+      - targets: ["http://rabbitmq:15672/api/health/checks/alarms"]
+        labels: { service_name: rabbitmq }
+    relabel_configs: *probe_relabel

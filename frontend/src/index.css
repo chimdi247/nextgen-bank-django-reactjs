@@ -1,0 +1,56 @@
+@import "@fontsource-variable/manrope";
+@import "@fontsource-variable/sora";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* "Night ledger + volt": deep indigo ink on a cool lavender-white paper, one electric-lime accent for the money moments. */
+    --background: 240 24% 97%;
+    --foreground: 246 42% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 246 42% 10%;
+    --primary: 248 55% 14%;
+    --primary-foreground: 240 30% 98%;
+    --secondary: 240 20% 93%;
+    --secondary-foreground: 246 40% 16%;
+    --muted: 240 18% 93%;
+    --muted-foreground: 246 14% 40%;
+    --accent: 76 92% 54%;
+    --accent-foreground: 248 55% 9%;
+    --destructive: 350 74% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 158 68% 27%;
+    --success-foreground: 0 0% 100%;
+    --border: 240 17% 88%;
+    --input: 240 16% 82%;
+    --ring: 248 60% 45%;
+    --radius: 0.8rem;
+
+    --sidebar: 250 52% 8%;
+    --sidebar-foreground: 240 30% 92%;
+    --sidebar-muted: 246 18% 64%;
+  }
+
+  * { @apply border-border; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-background text-foreground antialiased font-sans; }
+  h1, h2, h3 { @apply font-display tracking-tight; }
+  :focus-visible { @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background; }
+}
+
+@layer utilities {
+  .tnum { font-variant-numeric: tabular-nums; }
+  .card-sheen {
+    background-image:
+      radial-gradient(120% 90% at 100% 0%, hsl(76 92% 54% / 0.22), transparent 55%),
+      linear-gradient(hsl(0 0% 100% / 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(0 0% 100% / 0.04) 1px, transparent 1px);
+    background-size: auto, 26px 26px, 26px 26px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
