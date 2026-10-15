@@ -16,7 +16,7 @@ DEBUG = env_bool("DEBUG", False)
 
 SITE_NAME = getenv("SITE_NAME")
 
-ALLOWED_HOSTS = getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,0.0.0.0,api,nginx").split(",")
+ALLOWED_HOSTS = getenv("DJANGO_ALLOWED_HOSTS", "34.171.152.81,127.0.0.1,0.0.0.0,api,nginx").split(",")
 
 ADMIN_URL = getenv("ADMIN_URL")
 
@@ -29,7 +29,7 @@ ADMIN_EMAIL = getenv("ADMIN_EMAIL")
 
 MAX_UPLOAD_SIZE = 1 * 1024 * 1024
 
-CSRF_TRUSTED_ORIGINS = getenv("CSRF_TRUSTED_ORIGINS", "http://localhost:8080").split(",")
+CSRF_TRUSTED_ORIGINS = getenv("CSRF_TRUSTED_ORIGINS", "http://34.171.152.81:8080").split(",")
 
 LOCKOUT_DURATION = timedelta(minutes=env_int("LOCKOUT_MINUTES", 1))
 
