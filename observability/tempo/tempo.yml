@@ -1,11 +1,12 @@
 # Tempo (single binary, local storage)
 #  * traces from the OTel Collector (OTLP gRPC :4317)
 #  * metrics-generator -> span-metrics + service graph, remote-written to Prometheus (Grafana service map)
+#  * local-blocks processor -> TraceQL metrics (Grafana Traces Drilldown)
 stream_over_http_enabled: true
 
 server:
   http_listen_port: 3200
-  log_level: warn
+  log_level: info            # switch back to "warn" once everything works
 
 distributor:
   receivers:
@@ -34,6 +35,9 @@ metrics_generator:
   traces_storage:
     path: /var/tempo/generator/traces
   processor:
+    local_blocks:
+      filter_server_spans: false   # include all spans, not only server spans
+      flush_to_storage: true       # allows TraceQL metrics over older data
     service_graphs:
       dimensions: [http.method, http.request.method]
     span_metrics:
@@ -50,4 +54,4 @@ storage:
 overrides:
   defaults:
     metrics_generator:
-      processors: [service-graphs, span-metrics]
+      processors: [service-graphs, span-metrics, local-blocks]
