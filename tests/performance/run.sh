@@ -14,6 +14,14 @@
 #   transfers    2 min: real 3-step transfers + money-conservation check
 #   read-heavy   ~6 min: balances / history / profile only
 #   suite        smoke -> load -> spike -> transfers (stops at the first failure)
+
+# LOAD_VUS=50 HOLD=10m make test-load
+# PEAK_VUS=60 make test-stress
+# DURATION=30m SOAK_VUS=20 make test-soak
+# VUS=5 DURATION=2m make test-smoke
+
+# PEAK_VUS=60 make test-stress      # a gentler first try
+# PEAK_VUS=250 make test-stress     # heavier, once 120 looks comfortable
 #
 # Customers perf1..perf<USERS> are created (idempotently) with `manage.py seed_demo_data` before every run.
 # Tune with env vars, e.g.   LOAD_VUS=50 HOLD=10m tests/performance/run.sh load
